@@ -4,7 +4,7 @@
 
 ChippyDip is an original, open-source retro-console-inspired instrument lab, building toward a **Windows standalone instrument + VST3 for FL Studio**. Its first real deliverable is a playable browser lab with four chip families: no account, ROM, emulator or copyrighted game sample required.
 
-> **Status: v0.5 browser Web Lab + v0.6 native C++ DSP foundation.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. Standalone/VST3 builds remain planned.
+> **Status: v0.5 browser Web Lab + v0.6 native C++ DSP foundation.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. A **first Windows VST3 plugin candidate** is in development, but FL Studio host acceptance and the standalone app are not yet verified.
 
 ## Try it
 
@@ -25,6 +25,10 @@ Visit the local address printed by Vite. For a production build:
 npm run build
 npm run preview
 ```
+
+## Native v0.7 (first VST3 candidate, not host-verified)
+
+Native Windows VST3 source and a Windows Actions build target now bridge the original C++ DSP to Steinberg's MIT-licensed VST3 SDK. The candidate supports VST3 MIDI note-on/off events, stereo outputs, basic bank/sound/level parameters and plugin state. **An FL Studio scan, load, sound, project recall and offline bounce are required before calling this a working host plugin.** See [VST3 first-host acceptance instructions](docs/VST3_FIRST_HOST.md). There is not yet a standalone Windows GUI.
 
 ## Native v0.6 (C++20 and offline WAV)
 
@@ -57,7 +61,7 @@ Browsers suspend audio until a user gesture; press a note or Play to activate it
 | v0.4 | SNES-inspired PCM sample lab | Original factory samples, audio import, playback, echo and tests; BRR decoder/encoder future |
 | v0.5 | DOUBLE DIP cross-chip layers | Four independent lanes, levels, transpose, mute, presets, JSON v5 and WAV |
 | v0.6 | Native DSP core | Portable C++20 library, 32 voices, Windows/Linux CI, 4-family WAV demo |
-| v0.7 | Standalone + VST3 | Plugin loads in current FL Studio, MIDI and automation verified |
+| v0.7 | VST3 host candidate | Windows plugin bundle build, basic MIDI/stereo/parameters/state; FL Studio acceptance pending |
 | v1.0 | Full release | Reproducible installers, compatibility testing, documentation |
 
 ## Architecture
