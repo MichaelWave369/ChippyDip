@@ -61,3 +61,33 @@
 .fm-editor>p{color:#9aacbd;font-size:11px;line-height:1.5;margin:13px 0 0}
 @media(max-width:1050px){.fm-operators{grid-template-columns:1fr}.fm-algorithms{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.chip-selector button{flex-direction:column;gap:5px;font-size:9px}.fm-editor{padding:12px 9px}.fm-header small{font-size:8px}.fm-algorithms button small{font-size:7px}.fm-index{grid-template-columns:1fr auto}.fm-index input{grid-column:span 2}.fm-operator-main{grid-template-columns:75px 1fr}}
+
+
+/* ChippyDip v0.4 · SNES-inspired sample station */
+.chip-selector{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.chip-selector button{min-width:0}
+.sample-editor{margin:0 14px 15px;background:#131d2d;border:1px solid #4f5f7c;border-radius:8px;padding:16px}
+.sample-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.sample-header div{display:flex;flex-direction:column;gap:5px}
+.sample-header strong{font:900 11px monospace;letter-spacing:.7px;color:#cbd0ff}
+.sample-header small{font:800 9px monospace;color:#91a4b7}
+.sample-header button,.sample-buttons button{border:1px solid #506176;background:#273449;color:#e1e8ee;border-radius:5px;padding:9px;font:900 9px monospace}
+.sample-header button:hover,.sample-buttons button:hover{border-color:#bcf983}
+.sample-source{display:flex;align-items:center;gap:13px;padding:13px;background:#0d1725;border:1px solid #354961;border-radius:6px;min-width:0}
+.sample-icon{width:45px;height:45px;display:grid;place-items:center;background:#d4b6fa;color:#182034;border-radius:6px;font-size:28px;font-weight:900}
+.sample-source-info{display:flex;flex-direction:column;gap:6px;min-width:0}
+.sample-source-info b{font:900 12px monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sample-source-info small{font:800 9px monospace;color:#9dafbf}
+.sample-buttons{display:flex;gap:8px;margin:11px 0 15px;flex-wrap:wrap}
+.sample-upload{cursor:pointer;background:#bfef86;color:#16261f;border:1px solid #d0f5a1;border-radius:5px;padding:10px 14px;font:900 10px monospace;position:relative}
+.sample-upload input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+.sample-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;margin:14px 0}
+.sample-slider{display:flex;flex-direction:column;gap:7px}
+.sample-slider>span{display:flex;justify-content:space-between;font:900 10px monospace;color:#a9bac9}
+.sample-slider b{color:#d4b6fa}
+.sample-slider input{width:100%;accent-color:#c3a9f8}
+.sample-loop{display:flex;align-items:center;gap:10px;font:900 10px monospace;color:#cbd5db;margin:15px 0;cursor:pointer}
+.sample-loop input{accent-color:#bfea8a;width:17px;height:17px}
+.sample-editor p{font:800 10px/1.55 monospace;color:#a9bac9;margin:11px 0}
+.sample-warning{font:700 10px/1.55 monospace;color:#f2c99b;display:block}
+@media(max-width:560px){.sample-controls{grid-template-columns:1fr}.sample-editor{padding:12px 10px}.sample-header strong{font-size:10px}.sample-source-info small{font-size:8px}}

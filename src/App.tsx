@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, FM_PRESETS, FM_ALGORITHMS, GB_WAVES, cloneFmPatch, exportLoop, noteLabel } from './audio'
-import type { ChipFamily, FmPatch, FmOperator } from './audio'
+import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, FM_PRESETS, SNES_PRESETS, FM_ALGORITHMS, GB_WAVES, cloneFmPatch, cloneSnesPatch, decodeSampleFile, exportLoop, noteLabel } from './audio'
+import type { ChipFamily, FmPatch, FmOperator, SnesPatch, SampleData } from './audio'
 import { parsePattern, serializePattern } from './pattern'
 
 const KEYS = [
@@ -79,6 +79,9 @@ export default function App() {
   const [presetId, setPresetId] = useState('hero')
   const [customWaveTables, setCustomWaveTables] = useState<Record<string, number[]>>({})
   const [customFmPatches, setCustomFmPatches] = useState<Record<string, FmPatch>>({})
+  const [customSamplePatches, setCustomSamplePatches] = useState<Record<string, SnesPatch>>({})
+  const [importedSamples, setImportedSamples] = useState<Record<string, SampleData>>({})
+  const [sampleMessage, setSampleMessage] = useState('')
   const [duty, setDuty] = useState(.5)
   const [volume, setVolume] = useState(72)
   const [bpm, setBpm] = useState(116)
@@ -90,15 +93,17 @@ export default function App() {
   const [status, setStatus] = useState<'idle' | 'ready' | 'error'>('idle')
   const [exporting, setExporting] = useState(false)
   const preset = PRESETS.find(p => p.id === presetId) ?? PRESETS[0]
-  const currentBank = chip === 'nes' ? NES_PRESETS : chip === 'gameboy' ? GAMEBOY_PRESETS : FM_PRESETS
+  const currentBank = chip === 'nes' ? NES_PRESETS : chip === 'gameboy' ? GAMEBOY_PRESETS : chip === 'genesis' ? FM_PRESETS : SNES_PRESETS
   const activeWave = customWaveTables[preset.id] ?? preset.table ?? GB_WAVES.round
   const activeFm = customFmPatches[preset.id] ?? preset.fm
-  const latestRef = useRef({ steps, preset, duty, activeWave, activeFm })
-  latestRef.current = { steps, preset, duty, activeWave, activeFm }
+  const activeSample = customSamplePatches[preset.id] ?? preset.sample
+  const activeSampleData = importedSamples[preset.id]
+  const latestRef = useRef({ steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData })
+  latestRef.current = { steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData }
 
   const selectChip = (selected: ChipFamily) => {
     setChip(selected)
-    setPresetId(selected === 'nes' ? NES_PRESETS[0].id : selected === 'gameboy' ? GAMEBOY_PRESETS[0].id : FM_PRESETS[0].id)
+    setPresetId(selected === 'nes' ? NES_PRESETS[0].id : selected === 'gameboy' ? GAMEBOY_PRESETS[0].id : selected === 'genesis' ? FM_PRESETS[0].id : SNES_PRESETS[0].id)
   }
 
   const editWaveValue = (index: number, value: number) => {
@@ -123,6 +128,27 @@ export default function App() {
     })
   }
 
+  const updateSample = (update: (patch: SnesPatch) => SnesPatch) => {
+    if (preset.wave !== 'sample' || !preset.sample) return
+    setCustomSamplePatches(previous => ({
+      ...previous,
+      [preset.id]: update(cloneSnesPatch(previous[preset.id] ?? preset.sample!)),
+    }))
+  }
+
+  const importSample = async (file: File | undefined) => {
+    if (!file || preset.wave !== 'sample') return
+    const targetId = preset.id
+    setSampleMessage('DECODING SAMPLE...')
+    try {
+      const decoded = await decodeSampleFile(file)
+      setImportedSamples(previous => ({ ...previous, [targetId]: decoded }))
+      setSampleMessage('IMPORTED: ' + decoded.name + ' · SESSION ONLY')
+    } catch (error) {
+      setSampleMessage(error instanceof Error ? error.message : 'COULD NOT DECODE AUDIO')
+    }
+  }
+
   const wake = useCallback(async () => {
     try {
       await audio.wake()
@@ -142,10 +168,10 @@ export default function App() {
     setSelectedNote(note)
     void wake().then(ready => {
       if (!ready || !heldRef.current.has(id)) return
-      const stop = audio.noteOn(note, preset, duty, activeWave, activeFm)
+      const stop = audio.noteOn(note, preset, duty, activeWave, activeFm, activeSample, activeSampleData)
       releasesRef.current.set(id, stop)
     })
-  }, [wake, audio, preset, duty, activeWave, activeFm])
+  }, [wake, audio, preset, duty, activeWave, activeFm, activeSample, activeSampleData])
 
   const release = useCallback((id: string) => {
     heldRef.current.delete(id)
@@ -188,9 +214,9 @@ export default function App() {
     const tick = () => {
       const horizon = audio.time + .11
       while (nextAt < horizon) {
-        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table, activeFm: fm } = latestRef.current
+        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table, activeFm: fm, activeSample: samplePatch, activeSampleData: pcm } = latestRef.current
         const note = notes[index]
-        if (note !== null) audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table, fm)
+        if (note !== null) audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table, fm, samplePatch, pcm)
         const highlight = index
         window.setTimeout(() => setPlayhead(highlight), Math.max(0, (nextAt - audio.time) * 1000))
         nextAt += stepTime
@@ -223,6 +249,7 @@ export default function App() {
       preset, duty, bpm, steps,
       ...(preset.wave === 'wavetable' ? { table: activeWave } : {}),
       ...(preset.wave === 'fm' && activeFm ? { fm: activeFm } : {}),
+      ...(preset.wave === 'sample' && activeSample ? { sample: activeSample } : {}),
     })
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'chippydip-pattern.json')
   }
@@ -241,6 +268,17 @@ export default function App() {
       if (result.fm) {
         setCustomFmPatches(previous => ({ ...previous, [result.preset.id]: result.fm! }))
       }
+      if (result.sample) {
+        setCustomSamplePatches(previous => ({ ...previous, [result.preset.id]: result.sample! }))
+        // A JSON pattern contains settings only, never embedded or linked
+        // audio. Prevent old session PCM from silently affecting a new load.
+        setImportedSamples(previous => {
+          const next = { ...previous }
+          delete next[result.preset.id]
+          return next
+        })
+        setSampleMessage('LOADED PATCH SETTINGS · IMPORT AUDIO AGAIN IF NEEDED')
+      }
       setDuty(result.duty)
       setBpm(result.bpm)
     } catch {
@@ -251,7 +289,7 @@ export default function App() {
   const renderWav = async () => {
     setExporting(true)
     try {
-      const wav = await exportLoop(steps, preset, bpm, duty, activeWave, activeFm)
+      const wav = await exportLoop(steps, preset, bpm, duty, activeWave, activeFm, activeSample, activeSampleData)
       download(wav, 'chippydip-' + preset.id + '-' + bpm + 'bpm.wav')
     } catch (error) {
       console.error('WAV rendering failed', error)
@@ -269,7 +307,7 @@ export default function App() {
         <div className="brandmark" aria-hidden="true"><span>✳</span></div>
         <div className="top-brand">CHIPPY<span>DIP</span><sup>®*</sup></div>
         <div className="top-spacer" />
-        <span className="top-build">WEB LAB <b>v0.3</b></span>
+        <span className="top-build">WEB LAB <b>v0.4</b></span>
         <a className="top-link" href={repoUrl} target="_blank" rel="noreferrer">GITHUB ↗</a>
       </header>
 
@@ -298,11 +336,12 @@ export default function App() {
         <div className="section-heading"><span>01 / SOUND LAB</span><span className="status"><i className={status === 'ready' ? 'on' : ''} /> {status === 'idle' ? 'CLICK A KEY TO START AUDIO' : status === 'ready' ? 'AUDIO ENGINE ONLINE' : 'AUDIO BLOCKED'}</span></div>
         <section className="workbench">
           <aside className="preset-panel panel">
-            <div className="panel-heading"><span>PATCH BAY</span><span>{chip === 'nes' ? 'NES CLASSICS' : chip === 'gameboy' ? 'POCKET WAVE LAB' : 'GENESIS FM LAB'}</span></div>
+            <div className="panel-heading"><span>PATCH BAY</span><span>{chip === 'nes' ? 'NES CLASSICS' : chip === 'gameboy' ? 'POCKET WAVE LAB' : chip === 'genesis' ? 'GENESIS FM LAB' : 'SNES SAMPLE LAB'}</span></div>
             <div className="chip-selector" role="group" aria-label="Select sound chip">
               <button className={chip === 'nes' ? 'selected' : ''} aria-pressed={chip === 'nes'} onClick={() => selectChip('nes')}>NES <small>01</small></button>
               <button className={chip === 'gameboy' ? 'selected' : ''} aria-pressed={chip === 'gameboy'} onClick={() => selectChip('gameboy')}>GAME BOY <small>02</small></button>
               <button className={chip === 'genesis' ? 'selected' : ''} aria-pressed={chip === 'genesis'} onClick={() => selectChip('genesis')}>GENESIS <small>03</small></button>
+              <button className={chip === 'snes' ? 'selected' : ''} aria-pressed={chip === 'snes'} onClick={() => selectChip('snes')}>SNES <small>04</small></button>
             </div>
             <div className="preset-list">
               {currentBank.map((p, i) => (
@@ -315,16 +354,70 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <div className="panel-foot">{chip === 'nes' ? '5 ORIGINAL v0.1 PATCHES · PRESERVED' : chip === 'gameboy' ? '4 POCKET PATCHES · 32-STEP WAVE RAM' : '4 FM FACTORY PATCHES · 4 OPERATORS'}</div>
+            <div className="panel-foot">{chip === 'nes' ? '5 ORIGINAL v0.1 PATCHES · PRESERVED' : chip === 'gameboy' ? '4 POCKET PATCHES · 32-STEP WAVE RAM' : chip === 'genesis' ? '4 FM FACTORY PATCHES · 4 OPERATORS' : '4 ORIGINAL SAMPLE PATCHES · LOCAL IMPORT'}</div>
           </aside>
 
           <div className="main-panel panel">
-            <div className="panel-heading"><span>CHIP SCOPE / {chip === 'nes' ? 'NES-INSPIRED' : chip === 'gameboy' ? 'GAME BOY-INSPIRED' : 'GENESIS-INSPIRED FM'}</span><span className="wave-tag">{preset.wave.toUpperCase()} CHANNEL</span></div>
+            <div className="panel-heading"><span>CHIP SCOPE / {chip === 'nes' ? 'NES-INSPIRED' : chip === 'gameboy' ? 'GAME BOY-INSPIRED' : chip === 'genesis' ? 'GENESIS-INSPIRED FM' : 'SNES-INSPIRED PCM'}</span><span className="wave-tag">{preset.wave.toUpperCase()} CHANNEL</span></div>
             <div className="screen"><Oscilloscope analyser={scopeNode} /><span className="scope-corner top">CH 01 / LIVE</span><span className="scope-corner bottom">♪ {noteLabel(selectedNote)} · {Math.round(440 * Math.pow(2, (selectedNote - 69) / 12))} Hz</span></div>
             <div className="controls">
               <div className="control-group"><label htmlFor="volume">MASTER VOLUME <b>{volume}%</b></label><input id="volume" type="range" min="0" max="100" value={volume} onChange={event => { const v = Number(event.target.value); setVolume(v); audio.setVolume(v / 100) }} /></div>
               <div className="control-group duty-group"><span className="input-label">PULSE DUTY</span><div className="duty-options">{DUTIES.map(d => <button key={d} disabled={preset.wave !== 'pulse'} className={duty === d ? 'chosen' : ''} onClick={() => setDuty(d)} aria-pressed={duty === d}>{d * 100}%</button>)}</div></div>
             </div>
+            {preset.wave === 'sample' && activeSample && (
+              <div className="sample-editor">
+                <div className="sample-header">
+                  <div><strong>SNES-STYLE SAMPLE LAB</strong><small>ORIGINAL PCM · PITCHED PLAYBACK · ECHO</small></div>
+                  <button onClick={() => {
+                    if (preset.sample) setCustomSamplePatches(previous => ({ ...previous, [preset.id]: cloneSnesPatch(preset.sample!) }))
+                  }}>RESET PATCH ↺</button>
+                </div>
+                <div className="sample-source">
+                  <div className="sample-icon">♫</div>
+                  <div className="sample-source-info">
+                    <b>{activeSampleData ? activeSampleData.name : 'FACTORY / ' + activeSample.shape.toUpperCase()}</b>
+                    <small>{activeSampleData ? 'USER IMPORT · MONO PCM IN SESSION' : 'GENERATED BY CHIPPYDIP · NO GAME AUDIO'}</small>
+                  </div>
+                </div>
+                <div className="sample-buttons">
+                  <label className="sample-upload">↑ IMPORT AUDIO
+                    <input type="file" accept="audio/*,.wav,.mp3,.ogg,.flac" onChange={event => {
+                      void importSample(event.currentTarget.files?.[0])
+                      event.currentTarget.value = ''
+                    }}/>
+                  </label>
+                  <button disabled={!activeSampleData} onClick={() => {
+                    setImportedSamples(previous => {
+                      const next = { ...previous }
+                      delete next[preset.id]
+                      return next
+                    })
+                    setSampleMessage('RESTORED FACTORY AUDIO')
+                  }}>USE FACTORY SAMPLE</button>
+                </div>
+                <div className="sample-controls">
+                  {([
+                    { field: 'tune', title: 'TUNE', min: -12, max: 12, step: 1, unit: 'st' },
+                    { field: 'attack', title: 'ATTACK', min: .001, max: 2, step: .005, unit: 's' },
+                    { field: 'release', title: 'RELEASE', min: .01, max: 4, step: .01, unit: 's' },
+                    { field: 'echoMix', title: 'ECHO MIX', min: 0, max: .7, step: .01, unit: '' },
+                    { field: 'echoTime', title: 'ECHO TIME', min: .07, max: .5, step: .01, unit: 's' },
+                  ] as const).map(({ field, title, min, max, step, unit }) => (
+                    <label className="sample-slider" key={field}>
+                      <span>{title}<b>{activeSample[field].toFixed(field === 'tune' ? 0 : 2)}{unit}</b></span>
+                      <input type="range" min={min} max={max} step={step} value={activeSample[field]}
+                        onChange={event => updateSample(p => ({ ...p, [field]: Number(event.target.value) }))}/>
+                    </label>
+                  ))}
+                </div>
+                <label className="sample-loop"><input type="checkbox" checked={activeSample.loop}
+                  onChange={event => updateSample(p => ({ ...p, loop: event.target.checked }))}/>
+                  LOOP SAMPLE DURING HELD NOTES
+                </label>
+                <p>{sampleMessage || 'IMPORT YOUR OWN SHORT AUDIO (MAX 6 MiB, 8s). AUDIO IS NEVER UPLOADED.'}</p>
+                <small className="sample-warning">Pattern JSON saves controls, not imported audio. WAV export includes the imported sample while it remains in this browser session.</small>
+              </div>
+            )}
             {preset.wave === 'fm' && activeFm && (
               <div className="fm-editor">
                 <div className="fm-header">
@@ -451,8 +544,8 @@ export default function App() {
         </section>
 
         <section className="future-section">
-          <div><span className="eyebrow">THREE CHIP BANKS · MORE TO GO</span><h2>THE DIP KEEPS GETTING DEEPER.</h2><p>NES classics, Game Boy waveforms and four-operator Genesis-inspired FM sounds are now playable. Next up: SNES sample synthesis, Double Dip multi-chip layering, native standalone and VST3 builds.</p></div>
-          <div className="future-chips"><span>GAME BOY <small>NOW PLAYABLE</small></span><span>GENESIS <small>NOW PLAYABLE</small></span><span>SNES <small>PLANNED</small></span><span>VST3 <small>PLANNED</small></span></div>
+          <div><span className="eyebrow">FOUR SOUND FAMILIES · AND COUNTING</span><h2>THE DIP KEEPS GETTING DEEPER.</h2><p>NES pulses, Game Boy wavetables, Genesis-style FM and SNES-inspired sampled instruments now share one sound lab. Next: Double Dip cross-chip layering, followed by native standalone and VST3 builds.</p></div>
+          <div className="future-chips"><span>GAME BOY <small>NOW PLAYABLE</small></span><span>GENESIS <small>NOW PLAYABLE</small></span><span>SNES <small>NOW PLAYABLE</small></span><span>VST3 <small>PLANNED</small></span></div>
         </section>
       </main>
       <footer><span>© 2026 CHIPPYDIP · AN ORIGINAL OPEN-SOURCE SOUND LAB</span><span>BUILT FOR THE BROS WHO LOVE THE BLEEP-BLOOPS.</span></footer>

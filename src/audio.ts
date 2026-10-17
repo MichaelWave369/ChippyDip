@@ -5,12 +5,16 @@
  */
 import { createFmVoice, FM_PRESETS } from './fm.js'
 import type { FmPatch } from './fm.js'
+import { createSampleVoice, SNES_PRESETS } from './snes.js'
+import type { SnesPatch, SampleData } from './snes.js'
+export { SNES_PRESETS, SNES_SAMPLE_IDS, isValidSnesPatch, isValidSampleData, makeFactorySample, decodeSampleFile, cloneSnesPatch } from './snes.js'
+export type { SnesPatch, SampleData, SampleShape } from './snes.js'
 
 export { FM_PRESETS, FM_ALGORITHMS, isValidFmPatch, cloneFmPatch } from './fm.js'
 export type { FmPatch, FmOperator, FmAlgorithm } from './fm.js'
 
-export type WaveKind = 'pulse' | 'triangle' | 'noise' | 'wavetable' | 'fm'
-export type ChipFamily = 'nes' | 'gameboy' | 'genesis'
+export type WaveKind = 'pulse' | 'triangle' | 'noise' | 'wavetable' | 'fm' | 'sample'
+export type ChipFamily = 'nes' | 'gameboy' | 'genesis' | 'snes'
 
 export interface Preset {
   id: string
@@ -27,6 +31,7 @@ export interface Preset {
   chip?: ChipFamily
   table?: number[]
   fm?: FmPatch
+  sample?: SnesPatch
 }
 
 // The v0.1 factory patches and their sound settings are deliberately unchanged.
@@ -52,7 +57,7 @@ export const GAMEBOY_PRESETS: Preset[] = [
   { id: 'pocket-bell', name: 'POCKET BELL', caption: 'Shimmering wave tone', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.bell, duty: .5, attack: .007, decay: .32, sustain: .25, release: .35, level: .21, accent: '#96c1ff' },
   { id: 'pocket-tooth', name: 'POCKET TOOTH', caption: 'Crunchy rising edge', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.tooth, duty: .5, attack: .001, decay: .08, sustain: .8, release: .10, level: .18, accent: '#f2a3d5' },
 ]
-export const PRESETS: Preset[] = [...NES_PRESETS, ...GAMEBOY_PRESETS, ...FM_PRESETS]
+export const PRESETS: Preset[] = [...NES_PRESETS, ...GAMEBOY_PRESETS, ...FM_PRESETS, ...SNES_PRESETS]
 
 export function isValidWaveTable(value: unknown): value is number[] {
   return Array.isArray(value) && value.length === 32 &&
@@ -159,7 +164,14 @@ export function createVoice(
   dutyOverride?: number,
   tableOverride?: number[],
   fmOverride?: FmPatch,
+  samplePatchOverride?: SnesPatch,
+  sampleDataOverride?: SampleData,
 ): StopVoice {
+  if (preset.wave === 'sample') {
+    const patch = samplePatchOverride ?? preset.sample
+    if (!patch) throw new Error('Sample preset missing settings')
+    return createSampleVoice(host, destination, midi, patch, preset.level, when, velocity, sampleDataOverride)
+  }
   if (preset.wave === 'fm') {
     const patch = fmOverride ?? preset.fm
     if (!patch) throw new Error('FM preset missing operator patch')
@@ -248,9 +260,9 @@ export class ChippyAudio {
     this.input?.gain.setTargetAtTime(this.level, this.time, .015)
   }
 
-  noteOn(note: number, preset: Preset, duty?: number, table?: number[], fm?: FmPatch): StopVoice {
+  noteOn(note: number, preset: Preset, duty?: number, table?: number[], fm?: FmPatch, samplePatch?: SnesPatch, sampleData?: SampleData): StopVoice {
     if (!this.ctx || !this.input) return () => {}
-    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty, table, fm)
+    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty, table, fm, samplePatch, sampleData)
     this.voices.add(voice)
     return () => {
       voice()
@@ -258,9 +270,9 @@ export class ChippyAudio {
     }
   }
 
-  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number, table?: number[], fm?: FmPatch): void {
+  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number, table?: number[], fm?: FmPatch, samplePatch?: SnesPatch, sampleData?: SampleData): void {
     if (!this.ctx || !this.input) return
-    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty, table, fm)
+    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty, table, fm, samplePatch, sampleData)
     stop(start + duration)
   }
 
@@ -286,6 +298,8 @@ export async function exportLoop(
   duty?: number,
   table?: number[],
   fm?: FmPatch,
+  samplePatch?: SnesPatch,
+  sampleData?: SampleData,
 ): Promise<Blob> {
   const stepTime = 60 / bpm / 4
   const sampleRate = 44100
@@ -301,7 +315,7 @@ export async function exportLoop(
   steps.forEach((note, i) => {
     if (note === null) return
     const at = .05 + stepTime * i
-    const stop = createVoice(offline, input, note, preset, at, .83, duty, table, fm)
+    const stop = createVoice(offline, input, note, preset, at, .83, duty, table, fm, samplePatch, sampleData)
     stop(at + stepTime * .76)
   })
   const rendered = await offline.startRendering()
