@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, GB_WAVES, isValidWaveTable, exportLoop, noteLabel } from './audio'
-import type { ChipFamily } from './audio'
+import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, FM_PRESETS, FM_ALGORITHMS, GB_WAVES, cloneFmPatch, exportLoop, noteLabel } from './audio'
+import type { ChipFamily, FmPatch, FmOperator } from './audio'
+import { parsePattern, serializePattern } from './pattern'
 
 const KEYS = [
   { offset: 0, key: 'A' }, { offset: 1, key: 'W' }, { offset: 2, key: 'S' },
@@ -11,6 +12,7 @@ const KEYS = [
 ]
 const BLACK = new Set([1, 3, 6, 8, 10])
 const DUTIES = [.125, .25, .5, .75]
+const FM_RATIOS = [.5, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16]
 const repoUrl = 'https://github.com/MichaelWave369/ChippyDip'
 
 function Oscilloscope({ analyser }: { analyser: () => AnalyserNode | null }) {
@@ -76,6 +78,7 @@ export default function App() {
   const [chip, setChip] = useState<ChipFamily>('nes')
   const [presetId, setPresetId] = useState('hero')
   const [customWaveTables, setCustomWaveTables] = useState<Record<string, number[]>>({})
+  const [customFmPatches, setCustomFmPatches] = useState<Record<string, FmPatch>>({})
   const [duty, setDuty] = useState(.5)
   const [volume, setVolume] = useState(72)
   const [bpm, setBpm] = useState(116)
@@ -87,14 +90,15 @@ export default function App() {
   const [status, setStatus] = useState<'idle' | 'ready' | 'error'>('idle')
   const [exporting, setExporting] = useState(false)
   const preset = PRESETS.find(p => p.id === presetId) ?? PRESETS[0]
-  const currentBank = chip === 'nes' ? NES_PRESETS : GAMEBOY_PRESETS
+  const currentBank = chip === 'nes' ? NES_PRESETS : chip === 'gameboy' ? GAMEBOY_PRESETS : FM_PRESETS
   const activeWave = customWaveTables[preset.id] ?? preset.table ?? GB_WAVES.round
-  const latestRef = useRef({ steps, preset, duty, activeWave })
-  latestRef.current = { steps, preset, duty, activeWave }
+  const activeFm = customFmPatches[preset.id] ?? preset.fm
+  const latestRef = useRef({ steps, preset, duty, activeWave, activeFm })
+  latestRef.current = { steps, preset, duty, activeWave, activeFm }
 
   const selectChip = (selected: ChipFamily) => {
     setChip(selected)
-    setPresetId(selected === 'nes' ? NES_PRESETS[0].id : GAMEBOY_PRESETS[0].id)
+    setPresetId(selected === 'nes' ? NES_PRESETS[0].id : selected === 'gameboy' ? GAMEBOY_PRESETS[0].id : FM_PRESETS[0].id)
   }
 
   const editWaveValue = (index: number, value: number) => {
@@ -102,6 +106,21 @@ export default function App() {
     const next = [...activeWave]
     next[index] = Math.max(0, Math.min(15, Math.round(value)))
     setCustomWaveTables(previous => ({ ...previous, [preset.id]: next }))
+  }
+
+  const updateFm = (update: (fm: FmPatch) => FmPatch) => {
+    if (preset.wave !== 'fm' || !preset.fm) return
+    setCustomFmPatches(previous => ({
+      ...previous,
+      [preset.id]: update(cloneFmPatch(previous[preset.id] ?? preset.fm!)),
+    }))
+  }
+
+  const setFmOperator = (index: number, field: keyof FmOperator, value: number) => {
+    updateFm(fm => {
+      fm.operators[index][field] = value
+      return fm
+    })
   }
 
   const wake = useCallback(async () => {
@@ -123,10 +142,10 @@ export default function App() {
     setSelectedNote(note)
     void wake().then(ready => {
       if (!ready || !heldRef.current.has(id)) return
-      const stop = audio.noteOn(note, preset, duty, activeWave)
+      const stop = audio.noteOn(note, preset, duty, activeWave, activeFm)
       releasesRef.current.set(id, stop)
     })
-  }, [wake, audio, preset, duty, activeWave])
+  }, [wake, audio, preset, duty, activeWave, activeFm])
 
   const release = useCallback((id: string) => {
     heldRef.current.delete(id)
@@ -169,9 +188,9 @@ export default function App() {
     const tick = () => {
       const horizon = audio.time + .11
       while (nextAt < horizon) {
-        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table } = latestRef.current
+        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table, activeFm: fm } = latestRef.current
         const note = notes[index]
-        if (note !== null) audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table)
+        if (note !== null) audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table, fm)
         const highlight = index
         window.setTimeout(() => setPlayhead(highlight), Math.max(0, (nextAt - audio.time) * 1000))
         nextAt += stepTime
@@ -200,42 +219,30 @@ export default function App() {
   }
 
   const savePatch = () => {
-    const data = {
-      format: 'chippydip-pattern', version: 2, preset: preset.id, duty, bpm, steps,
+    const data = serializePattern({
+      preset, duty, bpm, steps,
       ...(preset.wave === 'wavetable' ? { table: activeWave } : {}),
-    }
+      ...(preset.wave === 'fm' && activeFm ? { fm: activeFm } : {}),
+    })
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'chippydip-pattern.json')
   }
 
   const loadPatch = async (file: File | undefined) => {
     if (!file) return
     try {
-      const parsed: unknown = JSON.parse(await file.text())
-      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid file')
-      const data = parsed as Record<string, unknown>
-      if (data.format !== 'chippydip-pattern' || (data.version !== 1 && data.version !== 2)) throw new Error('Wrong format')
-      if (!Array.isArray(data.steps) || data.steps.length !== 16 ||
-        !data.steps.every((n: unknown) => n === null || (typeof n === 'number' && Number.isInteger(n) && n >= 24 && n <= 108))) {
-        throw new Error('Invalid steps')
+      if (file.size > 150000) throw new Error('Oversized pattern')
+      const result = parsePattern(JSON.parse(await file.text()))
+      setSteps(result.steps)
+      setPresetId(result.preset.id)
+      setChip(result.preset.chip ?? 'nes')
+      if (result.table) {
+        setCustomWaveTables(previous => ({ ...previous, [result.preset.id]: result.table! }))
       }
-      if (typeof data.preset !== 'string' || !PRESETS.some(p => p.id === data.preset)) throw new Error('Invalid preset')
-      const loadedPreset = PRESETS.find(p => p.id === data.preset)!
-      if (data.version === 2 && loadedPreset.wave === 'wavetable' && data.table !== undefined && !isValidWaveTable(data.table)) {
-        throw new Error('Invalid wave table')
+      if (result.fm) {
+        setCustomFmPatches(previous => ({ ...previous, [result.preset.id]: result.fm! }))
       }
-      if (typeof data.bpm !== 'number' || !Number.isFinite(data.bpm) || data.bpm < 60 || data.bpm > 200) throw new Error('Invalid tempo')
-      if (typeof data.duty !== 'number' || !DUTIES.includes(data.duty)) throw new Error('Invalid duty')
-      setSteps(data.steps as (number | null)[])
-      setPresetId(data.preset)
-      setChip(loadedPreset.chip ?? 'nes')
-      if (loadedPreset.wave === 'wavetable') {
-        setCustomWaveTables(previous => ({
-          ...previous,
-          [loadedPreset.id]: data.version === 2 && isValidWaveTable(data.table) ? [...data.table] : [...(loadedPreset.table ?? GB_WAVES.round)],
-        }))
-      }
-      setDuty(data.duty)
-      setBpm(data.bpm)
+      setDuty(result.duty)
+      setBpm(result.bpm)
     } catch {
       window.alert('This does not look like a compatible ChippyDip pattern.')
     }
@@ -244,7 +251,7 @@ export default function App() {
   const renderWav = async () => {
     setExporting(true)
     try {
-      const wav = await exportLoop(steps, preset, bpm, duty, activeWave)
+      const wav = await exportLoop(steps, preset, bpm, duty, activeWave, activeFm)
       download(wav, 'chippydip-' + preset.id + '-' + bpm + 'bpm.wav')
     } catch (error) {
       console.error('WAV rendering failed', error)
@@ -262,7 +269,7 @@ export default function App() {
         <div className="brandmark" aria-hidden="true"><span>✳</span></div>
         <div className="top-brand">CHIPPY<span>DIP</span><sup>®*</sup></div>
         <div className="top-spacer" />
-        <span className="top-build">WEB LAB <b>v0.2</b></span>
+        <span className="top-build">WEB LAB <b>v0.3</b></span>
         <a className="top-link" href={repoUrl} target="_blank" rel="noreferrer">GITHUB ↗</a>
       </header>
 
@@ -291,10 +298,11 @@ export default function App() {
         <div className="section-heading"><span>01 / SOUND LAB</span><span className="status"><i className={status === 'ready' ? 'on' : ''} /> {status === 'idle' ? 'CLICK A KEY TO START AUDIO' : status === 'ready' ? 'AUDIO ENGINE ONLINE' : 'AUDIO BLOCKED'}</span></div>
         <section className="workbench">
           <aside className="preset-panel panel">
-            <div className="panel-heading"><span>PATCH BAY</span><span>{chip === 'nes' ? 'NES CLASSICS' : 'POCKET WAVE LAB'}</span></div>
+            <div className="panel-heading"><span>PATCH BAY</span><span>{chip === 'nes' ? 'NES CLASSICS' : chip === 'gameboy' ? 'POCKET WAVE LAB' : 'GENESIS FM LAB'}</span></div>
             <div className="chip-selector" role="group" aria-label="Select sound chip">
               <button className={chip === 'nes' ? 'selected' : ''} aria-pressed={chip === 'nes'} onClick={() => selectChip('nes')}>NES <small>01</small></button>
               <button className={chip === 'gameboy' ? 'selected' : ''} aria-pressed={chip === 'gameboy'} onClick={() => selectChip('gameboy')}>GAME BOY <small>02</small></button>
+              <button className={chip === 'genesis' ? 'selected' : ''} aria-pressed={chip === 'genesis'} onClick={() => selectChip('genesis')}>GENESIS <small>03</small></button>
             </div>
             <div className="preset-list">
               {currentBank.map((p, i) => (
@@ -307,16 +315,71 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <div className="panel-foot">{chip === 'nes' ? '5 ORIGINAL v0.1 PATCHES · PRESERVED' : '4 NEW POCKET PATCHES · 32-STEP WAVE RAM'}</div>
+            <div className="panel-foot">{chip === 'nes' ? '5 ORIGINAL v0.1 PATCHES · PRESERVED' : chip === 'gameboy' ? '4 POCKET PATCHES · 32-STEP WAVE RAM' : '4 FM FACTORY PATCHES · 4 OPERATORS'}</div>
           </aside>
 
           <div className="main-panel panel">
-            <div className="panel-heading"><span>CHIP SCOPE / {chip === 'nes' ? 'NES-INSPIRED' : 'GAME BOY-INSPIRED'}</span><span className="wave-tag">{preset.wave.toUpperCase()} CHANNEL</span></div>
+            <div className="panel-heading"><span>CHIP SCOPE / {chip === 'nes' ? 'NES-INSPIRED' : chip === 'gameboy' ? 'GAME BOY-INSPIRED' : 'GENESIS-INSPIRED FM'}</span><span className="wave-tag">{preset.wave.toUpperCase()} CHANNEL</span></div>
             <div className="screen"><Oscilloscope analyser={scopeNode} /><span className="scope-corner top">CH 01 / LIVE</span><span className="scope-corner bottom">♪ {noteLabel(selectedNote)} · {Math.round(440 * Math.pow(2, (selectedNote - 69) / 12))} Hz</span></div>
             <div className="controls">
               <div className="control-group"><label htmlFor="volume">MASTER VOLUME <b>{volume}%</b></label><input id="volume" type="range" min="0" max="100" value={volume} onChange={event => { const v = Number(event.target.value); setVolume(v); audio.setVolume(v / 100) }} /></div>
               <div className="control-group duty-group"><span className="input-label">PULSE DUTY</span><div className="duty-options">{DUTIES.map(d => <button key={d} disabled={preset.wave !== 'pulse'} className={duty === d ? 'chosen' : ''} onClick={() => setDuty(d)} aria-pressed={duty === d}>{d * 100}%</button>)}</div></div>
             </div>
+            {preset.wave === 'fm' && activeFm && (
+              <div className="fm-editor">
+                <div className="fm-header">
+                  <div><strong>4-OPERATOR FM PATCH LAB</strong><small>ORIGINAL AUDIO-RATE FREQUENCY MODULATION</small></div>
+                  <button onClick={() => {
+                    if (preset.fm) setCustomFmPatches(prev => ({ ...prev, [preset.id]: cloneFmPatch(preset.fm!) }))
+                  }}>RESET PATCH ↺</button>
+                </div>
+                <div className="fm-algorithms" role="group" aria-label="FM routing algorithm">
+                  {FM_ALGORITHMS.map((route, index) => (
+                    <button key={index} className={activeFm.algorithm === index ? 'selected' : ''} aria-pressed={activeFm.algorithm === index}
+                      onClick={() => updateFm(fm => ({ ...fm, algorithm: index as FmPatch['algorithm'] }))}>
+                      <b>ALG {index + 1}</b><small>{route.label}</small>
+                    </button>
+                  ))}
+                </div>
+                <label className="fm-index">MODULATION INDEX <strong>{activeFm.index.toFixed(1)}</strong>
+                  <input type="range" min="0" max="12" step=".1" value={activeFm.index}
+                    onChange={event => updateFm(fm => ({ ...fm, index: Number(event.target.value) }))}/>
+                </label>
+                <div className="fm-operators">
+                  {activeFm.operators.map((operator, index) => (
+                    <div className="fm-operator" key={index}>
+                      <div className="fm-operator-head"><b>OP {index + 1}</b><span>SINE OSCILLATOR</span></div>
+                      <div className="fm-operator-main">
+                        <label>RATIO
+                          <select aria-label={'Operator ' + (index + 1) + ' frequency ratio'} value={operator.ratio}
+                            onChange={event => setFmOperator(index, 'ratio', Number(event.target.value))}>
+                            {FM_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio}×</option>)}
+                          </select>
+                        </label>
+                        <label>LEVEL <b>{Math.round(operator.level * 100)}%</b>
+                          <input aria-label={'Operator ' + (index + 1) + ' level'} type="range" min="0" max="1" step=".01" value={operator.level}
+                            onChange={event => setFmOperator(index, 'level', Number(event.target.value))}/>
+                        </label>
+                      </div>
+                      <details className="fm-envelope">
+                        <summary>ADSR ENVELOPE <span>A / D / S / R</span></summary>
+                        {(['attack', 'decay', 'sustain', 'release'] as const).map(parameter => (
+                          <label key={parameter}>{parameter.toUpperCase()} <b>{operator[parameter].toFixed(parameter === 'sustain' ? 2 : 3)}</b>
+                            <input aria-label={'Operator ' + (index + 1) + ' ' + parameter} type="range"
+                              min={parameter === 'attack' ? '.001' : parameter === 'decay' ? '.005' : parameter === 'release' ? '.01' : '0'}
+                              max={parameter === 'attack' ? '2' : parameter === 'decay' ? '3' : parameter === 'release' ? '4' : '1'}
+                              step={parameter === 'sustain' ? '.01' : '.005'}
+                              value={operator[parameter]}
+                              onChange={event => setFmOperator(index, parameter, Number(event.target.value))}/>
+                          </label>
+                        ))}
+                      </details>
+                    </div>
+                  ))}
+                </div>
+                <p>Operators modulate each other at audio rate. Change the routing, ratios, levels and envelopes; play or export the result.</p>
+              </div>
+            )}
             {preset.wave === 'wavetable' && (
               <div className="wave-editor">
                 <div className="wave-editor-title">
@@ -388,8 +451,8 @@ export default function App() {
         </section>
 
         <section className="future-section">
-          <div><span className="eyebrow">TWO SOUND FAMILIES · MORE TO GO</span><h2>ONE CHIP WAS JUST THE BEGINNING.</h2><p>NES classics and original Game Boy-inspired 4-bit wavetable sounds are playable today. Next up: Genesis FM, SNES sampling, cross-chip layering, native standalone and VST3 builds.</p></div>
-          <div className="future-chips"><span>GAME BOY <small>NOW PLAYABLE</small></span><span>GENESIS <small>PLANNED</small></span><span>SNES <small>PLANNED</small></span><span>VST3 <small>PLANNED</small></span></div>
+          <div><span className="eyebrow">THREE CHIP BANKS · MORE TO GO</span><h2>THE DIP KEEPS GETTING DEEPER.</h2><p>NES classics, Game Boy waveforms and four-operator Genesis-inspired FM sounds are now playable. Next up: SNES sample synthesis, Double Dip multi-chip layering, native standalone and VST3 builds.</p></div>
+          <div className="future-chips"><span>GAME BOY <small>NOW PLAYABLE</small></span><span>GENESIS <small>NOW PLAYABLE</small></span><span>SNES <small>PLANNED</small></span><span>VST3 <small>PLANNED</small></span></div>
         </section>
       </main>
       <footer><span>© 2026 CHIPPYDIP · AN ORIGINAL OPEN-SOURCE SOUND LAB</span><span>BUILT FOR THE BROS WHO LOVE THE BLEEP-BLOOPS.</span></footer>

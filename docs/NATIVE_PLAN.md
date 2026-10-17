@@ -1,6 +1,6 @@
 # Native ChippyDip: standalone + VST3 plan
 
-The Web Lab is an interactive proof of instrument workflow, not a VST. Native playback must remain independent of browser APIs and allocation-heavy UI code.
+The v0.3 Web Lab is an interactive proof of instrument workflow, including four-operator FM, not a VST. Preserve the v0.1/v0.2/v0.3 parameter contracts and import compatibility. Native playback must remain independent of browser APIs and allocation-heavy UI code.
 
 ## Recommended split
 

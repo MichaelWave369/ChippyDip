@@ -27,8 +27,8 @@ test('the five original v0.1 factory presets remain exactly as released', () => 
 
 test('the Pocket Wave Lab offers four separate new 32-sample, 4-bit factory patches', () => {
   assert.equal(GAMEBOY_PRESETS.length, 4)
-  assert.equal(PRESETS.length, 9)
-  assert.equal(new Set(PRESETS.map(p => p.id)).size, 9)
+  assert.equal(PRESETS.length, 13)
+  assert.equal(new Set(PRESETS.map(p => p.id)).size, 13)
   assert.ok(GAMEBOY_PRESETS.every(p => p.chip === 'gameboy' && p.wave === 'wavetable'))
   assert.ok(GAMEBOY_PRESETS.every(p => isValidWaveTable(p.table)))
   assert.ok(Object.values(GB_WAVES).every(isValidWaveTable))
