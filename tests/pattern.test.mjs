@@ -54,7 +54,7 @@ test('import rejects malformed steps and malicious/nonfinite FM values', () => {
     { ...valid, preset: 'random-file' },
     { ...valid, fm: { algorithm: 0, operators: [], index: 1 } },
     { ...valid, fm: { ...FM_PRESETS[1].fm, index: 200 } },
-    { ...valid, version: 4 },
+    { ...valid, version: 5 },
   ]) assert.throws(() => parsePattern(item))
 })
 
