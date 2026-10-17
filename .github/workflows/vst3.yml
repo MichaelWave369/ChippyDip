@@ -1,0 +1,48 @@
+name: Windows VST3 Candidate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.github/workflows/vst3.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - '.github/workflows/vst3.yml'
+  workflow_dispatch:
+
+jobs:
+  vst3-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout official Steinberg VST3 SDK (build-only MIT dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          ref: v3.8.1_build_84
+          submodules: recursive
+          path: third_party/vst3sdk
+      - name: Configure Windows x64 plugin
+        shell: pwsh
+        run: |
+          cmake -S native -B build/vst3 -A x64 -DCHIPPYDIP_BUILD_VST3=ON "-DCHIPPYDIP_VST3_SDK_PATH=$env:GITHUB_WORKSPACE/third_party/vst3sdk"
+      - name: Compile real VST3 bundle
+        run: cmake --build build/vst3 --config Release --target ChippyDip --parallel 4
+      - name: Check VST3 bundle and package it
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem build/vst3 -Recurse -Directory -Filter 'ChippyDip.vst3' | Select-Object -First 1
+          if (-not $bundle) { throw 'ChippyDip.vst3 bundle not found' }
+          $payload = Get-ChildItem -Path $bundle.FullName -Recurse -File
+          if (@($payload).Count -eq 0) { throw 'VST3 bundle was empty' }
+          New-Item -ItemType Directory -Force -Path build/artifacts | Out-Null
+          Compress-Archive -Path $bundle.FullName -DestinationPath build/artifacts/ChippyDip-v0.7-Windows-x64-vst3.zip -Force
+          Get-FileHash build/artifacts/ChippyDip-v0.7-Windows-x64-vst3.zip -Algorithm SHA256 | Format-List
+      - name: Upload unsigned plugin candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChippyDip-v0.7-Windows-x64-VST3-CANDIDATE
+          path: build/artifacts/ChippyDip-v0.7-Windows-x64-vst3.zip
+          if-no-files-found: error
