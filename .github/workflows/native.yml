@@ -1,0 +1,46 @@
+name: Native ChippyDip CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - '.github/workflows/native.yml'
+  workflow_dispatch:
+
+jobs:
+  native:
+    name: Native ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable C++20
+        run: cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
+      - name: Compile DSP, CLI and tests
+        run: cmake --build build/native --config Release --parallel
+      - name: Run CTest regression suite
+        run: ctest --test-dir build/native -C Release --output-on-failure
+      - name: Render native WAV (Linux)
+        if: runner.os == 'Linux'
+        run: ./build/native/chippydip-render --output build/native/chippydip-native-demo.wav
+      - name: Render native WAV (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build/native/Release/chippydip-render.exe --output build/native/chippydip-native-demo.wav
+      - name: Upload demo and binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: chippydip-native-${{ runner.os }}
+          path: |
+            build/native/chippydip-native-demo.wav
+            build/native/chippydip-render
+            build/native/Release/chippydip-render.exe
+          if-no-files-found: error

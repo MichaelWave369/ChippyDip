@@ -4,7 +4,7 @@
 
 ChippyDip is an original, open-source retro-console-inspired instrument lab, building toward a **Windows standalone instrument + VST3 for FL Studio**. Its first real deliverable is a playable browser lab with four chip families: no account, ROM, emulator or copyrighted game sample required.
 
-> **Status: v0.5 Web Lab prototype.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. Standalone/VST3 builds remain planned.
+> **Status: v0.5 browser Web Lab + v0.6 native C++ DSP foundation.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. Standalone/VST3 builds remain planned.
 
 ## Try it
 
@@ -25,6 +25,10 @@ Visit the local address printed by Vite. For a production build:
 npm run build
 npm run preview
 ```
+
+## Native v0.6 (C++20 and offline WAV)
+
+New: a **dependency-free native C++20 DSP library**, a four-family native demo **WAV command-line renderer**, and CTest regression checks built on **Windows and Linux**. This is native audio code, not yet a Windows live-audio app or a VST3. See [native setup and fidelity boundaries](docs/NATIVE_CORE.md) for build/run instructions, including a WAV you can import into FL Studio.
 
 ## What works now
 
@@ -52,13 +56,13 @@ Browsers suspend audio until a user gesture; press a note or Play to activate it
 | v0.3 | Genesis-inspired four-operator FM | Four routing graphs, editor, preset tests, JSON v3 compatibility |
 | v0.4 | SNES-inspired PCM sample lab | Original factory samples, audio import, playback, echo and tests; BRR decoder/encoder future |
 | v0.5 | DOUBLE DIP cross-chip layers | Four independent lanes, levels, transpose, mute, presets, JSON v5 and WAV |
-| v0.6 | Native DSP core | Portable C++ DSP with regression tests |
+| v0.6 | Native DSP core | Portable C++20 library, 32 voices, Windows/Linux CI, 4-family WAV demo |
 | v0.7 | Standalone + VST3 | Plugin loads in current FL Studio, MIDI and automation verified |
 | v1.0 | Full release | Reproducible installers, compatibility testing, documentation |
 
 ## Architecture
 
-- `src/audio.ts` contains **independently written** Web Audio voice generation and offline WAV rendering.
+- `native/core` contains the original C++20 DSP contract, and `native/tools` includes a portable WAV renderer.\n- `src/audio.ts` contains **independently written** Web Audio voice generation and offline WAV rendering.
 - `src/layers.ts` holds the typed four-chip rack and import validation, and `src/LayerRack.tsx` presents the rack.\n- `src/App.tsx` handles the interface, transport, input and pattern controls.
 - `src/styles.css` contains ChippyDip's responsive, pixel-arcade visual system.
 - The future native core will use shared behavior specifications and test fixtures; **Web Audio code is not a drop-in native VST DSP implementation**.
