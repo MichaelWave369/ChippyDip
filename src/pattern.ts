@@ -53,6 +53,7 @@ export function parsePattern(input: unknown): ParsedPattern {
   if (data.format !== 'chippydip-pattern' || ![1, 2, 3, 4].includes(data.version as number)) {
     throw new Error('Unsupported pattern format')
   }
+  const version = data.version as number
   if (!Array.isArray(data.steps) || data.steps.length !== 16 ||
     !data.steps.every((note: unknown) => note === null ||
       (typeof note === 'number' && Number.isInteger(note) && note >= 24 && note <= 108))) {
@@ -68,35 +69,35 @@ export function parsePattern(input: unknown): ParsedPattern {
   let fm: FmPatch | undefined
   let sample: SnesPatch | undefined
   if (preset.wave === 'wavetable') {
-    if (data.version !== 1 && data.table !== undefined && !isValidWaveTable(data.table)) {
+    if (version !== 1 && data.table !== undefined && !isValidWaveTable(data.table)) {
       throw new Error('Invalid handheld wavetable')
     }
-    table = data.version !== 1 && isValidWaveTable(data.table) ? [...data.table] : [...(preset.table ?? [])]
+    table = version !== 1 && isValidWaveTable(data.table) ? [...data.table] : [...(preset.table ?? [])]
   }
   if (preset.wave === 'fm') {
-    if (data.version >= 3 && data.fm !== undefined && !isValidFmPatch(data.fm)) {
+    if (version >= 3 && data.fm !== undefined && !isValidFmPatch(data.fm)) {
       throw new Error('Invalid FM patch')
     }
-    fm = data.version >= 3 && isValidFmPatch(data.fm)
+    fm = version >= 3 && isValidFmPatch(data.fm)
       ? cloneFmPatch(data.fm)
       : preset.fm ? cloneFmPatch(preset.fm) : undefined
   }
   if (preset.wave === 'sample') {
-    if (data.version === 4 && data.sample !== undefined && !isValidSnesPatch(data.sample)) {
+    if (version === 4 && data.sample !== undefined && !isValidSnesPatch(data.sample)) {
       throw new Error('Invalid SNES sample settings')
     }
-    sample = data.version === 4 && isValidSnesPatch(data.sample)
+    sample = version === 4 && isValidSnesPatch(data.sample)
       ? cloneSnesPatch(data.sample)
       : preset.sample ? cloneSnesPatch(preset.sample) : undefined
   }
   // Any invalid optional data is rejected instead of being silently persisted.
-  if (data.version >= 3 && data.fm !== undefined && !isValidFmPatch(data.fm)) {
+  if (version >= 3 && data.fm !== undefined && !isValidFmPatch(data.fm)) {
     throw new Error('Malformed FM data')
   }
-  if (data.version !== 1 && data.table !== undefined && !isValidWaveTable(data.table)) {
+  if (version !== 1 && data.table !== undefined && !isValidWaveTable(data.table)) {
     throw new Error('Malformed wave data')
   }
-  if (data.version === 4 && data.sample !== undefined && !isValidSnesPatch(data.sample)) {
+  if (version === 4 && data.sample !== undefined && !isValidSnesPatch(data.sample)) {
     throw new Error('Malformed sample settings')
   }
   return { preset, duty: data.duty as number, bpm: data.bpm, steps: [...data.steps], table, fm, sample }

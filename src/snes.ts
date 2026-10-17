@@ -117,9 +117,9 @@ export function isValidSampleData(data: unknown): data is SampleData {
   const v = data as Record<string, unknown>
   return v.pcm instanceof Float32Array &&
     v.pcm.length > 0 && v.pcm.length <= 384000 &&
-    Number.isFinite(v.sampleRate) && v.sampleRate >= 8000 && v.sampleRate <= 96000 &&
+    typeof v.sampleRate === 'number' && Number.isFinite(v.sampleRate) && v.sampleRate >= 8000 && v.sampleRate <= 96000 &&
     v.pcm.length / v.sampleRate <= 8 &&
-    Number.isInteger(v.rootMidi) && v.rootMidi >= 24 && v.rootMidi <= 108 &&
+    typeof v.rootMidi === 'number' && Number.isInteger(v.rootMidi) && v.rootMidi >= 24 && v.rootMidi <= 108 &&
     typeof v.name === 'string' && v.name.length <= 160 &&
     v.pcm.every(Number.isFinite)
 }
@@ -158,7 +158,7 @@ function audioBuffer(host: AudioContext | OfflineAudioContext, sample: SampleDat
   const found = map.get(sample)
   if (found) return found
   const buffer = host.createBuffer(1, sample.pcm.length, sample.sampleRate)
-  buffer.copyToChannel(sample.pcm, 0)
+  buffer.copyToChannel(new Float32Array(sample.pcm), 0)
   map.set(sample, buffer)
   return buffer
 }
