@@ -3,7 +3,8 @@
  * This is a musical interpretation of the APU, NOT cycle-accurate emulation.
  * No ROMs, proprietary samples, or borrowed emulation cores.
  */
-export type WaveKind = 'pulse' | 'triangle' | 'noise'
+export type WaveKind = 'pulse' | 'triangle' | 'noise' | 'wavetable'
+export type ChipFamily = 'nes' | 'gameboy'
 
 export interface Preset {
   id: string
@@ -17,15 +18,39 @@ export interface Preset {
   release: number
   level: number
   accent: string
+  chip?: ChipFamily
+  table?: number[]
 }
 
-export const PRESETS: Preset[] = [
+// The v0.1 factory patches and their sound settings are deliberately unchanged.
+export const NES_PRESETS: Preset[] = [
   { id: 'hero', name: 'HERO PULSE', caption: 'Bright 8-bit lead', wave: 'pulse', duty: .5, attack: .004, decay: .08, sustain: .72, release: .13, level: .20, accent: '#c3fb6d' },
   { id: 'pluck', name: 'PIXEL PLUCK', caption: 'Short arcade melody', wave: 'pulse', duty: .125, attack: .002, decay: .14, sustain: .12, release: .08, level: .18, accent: '#f7a2c5' },
   { id: 'hollow', name: 'DUTY DREAM', caption: 'Hollow pulse texture', wave: 'pulse', duty: .25, attack: .035, decay: .18, sustain: .65, release: .24, level: .19, accent: '#97b3ff' },
   { id: 'bass', name: 'TRIANGLE BASS', caption: 'Round low-end pulse', wave: 'triangle', duty: .5, attack: .003, decay: .12, sustain: .80, release: .15, level: .24, accent: '#ffd07c' },
   { id: 'noise', name: 'NOISE MACHINE', caption: 'LFSR percussion', wave: 'noise', duty: .5, attack: .001, decay: .095, sustain: .04, release: .05, level: .24, accent: '#81edeb' },
 ]
+
+/** Original 32-entry, 4-bit (0..15) sound shapes, inspired by handheld wave RAM. */
+export const GB_WAVES: Record<string, number[]> = {
+  round: Array.from({ length: 32 }, (_, i) => Math.max(0, Math.min(15, Math.round(7.5 + 7.5 * Math.sin(2 * Math.PI * i / 32))))),
+  tooth: Array.from({ length: 32 }, (_, i) => Math.round(15 * i / 31)),
+  bite: Array.from({ length: 32 }, (_, i) => i < 8 ? 15 : i < 16 ? 10 : i < 24 ? 4 : 0),
+  bell: Array.from({ length: 32 }, (_, i) => Math.max(0, Math.min(15, Math.round(7.5 + 4.8 * Math.sin(2 * Math.PI * i / 32) + 3.1 * Math.sin(6 * Math.PI * i / 32))))),
+}
+
+export const GAMEBOY_PRESETS: Preset[] = [
+  { id: 'pocket-round', name: 'POCKET ROUND', caption: 'Soft handheld lead', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.round, duty: .5, attack: .007, decay: .13, sustain: .68, release: .16, level: .23, accent: '#a9d887' },
+  { id: 'pocket-bite', name: 'POCKET BITE', caption: 'Chunky wave bass', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.bite, duty: .5, attack: .002, decay: .095, sustain: .66, release: .11, level: .20, accent: '#f7d47d' },
+  { id: 'pocket-bell', name: 'POCKET BELL', caption: 'Shimmering wave tone', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.bell, duty: .5, attack: .007, decay: .32, sustain: .25, release: .35, level: .21, accent: '#96c1ff' },
+  { id: 'pocket-tooth', name: 'POCKET TOOTH', caption: 'Crunchy rising edge', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.tooth, duty: .5, attack: .001, decay: .08, sustain: .8, release: .10, level: .18, accent: '#f2a3d5' },
+]
+export const PRESETS: Preset[] = [...NES_PRESETS, ...GAMEBOY_PRESETS]
+
+export function isValidWaveTable(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length === 32 &&
+    value.every(sample => Number.isInteger(sample) && sample >= 0 && sample <= 15)
+}
 
 export const DEFAULT_STEPS: (number | null)[] =
   [60, null, 67, 72, 60, 67, 64, null, 65, null, 72, 69, 67, 64, 62, null]
@@ -68,6 +93,35 @@ function makeLfsrBuffer(host: AudioHost): AudioBuffer {
 
 const pulseWaves = new WeakMap<AudioHost, Map<number, PeriodicWave>>()
 const noiseBuffers = new WeakMap<AudioHost, AudioBuffer>()
+const tableWaves = new WeakMap<AudioHost, Map<string, PeriodicWave>>()
+
+/** Fourier synth of a 32-slot, 4-bit wavetable; musical, not cycle-accurate wave RAM. */
+function getTableWave(host: AudioHost, table: number[]): PeriodicWave {
+  const key = table.join(',')
+  let cache = tableWaves.get(host)
+  if (!cache) {
+    cache = new Map()
+    tableWaves.set(host, cache)
+  }
+  const found = cache.get(key)
+  if (found) return found
+  const real = new Float32Array(17)
+  const imag = new Float32Array(17)
+  const mean = table.reduce((sum, n) => sum + n, 0) / 32
+  for (let harmonic = 1; harmonic <= 16; harmonic++) {
+    for (let index = 0; index < 32; index++) {
+      const angle = 2 * Math.PI * harmonic * index / 32
+      const value = (table[index] - mean) / 7.5
+      real[harmonic] += (2 / 32) * value * Math.cos(angle)
+      imag[harmonic] += (2 / 32) * value * Math.sin(angle)
+    }
+  }
+  const wave = host.createPeriodicWave(real, imag, { disableNormalization: false })
+  // A capped cache avoids unbounded growth while editing wave columns.
+  if (cache.size >= 96) cache.clear()
+  cache.set(key, wave)
+  return wave
+}
 
 function getPulse(host: AudioHost, duty: number): PeriodicWave {
   let cache = pulseWaves.get(host)
@@ -96,6 +150,7 @@ export function createVoice(
   when: number,
   velocity = .85,
   dutyOverride?: number,
+  tableOverride?: number[],
 ): StopVoice {
   const gain = host.createGain()
   const attackEnd = when + Math.max(.001, preset.attack)
@@ -123,6 +178,7 @@ export function createVoice(
     const osc = host.createOscillator()
     osc.frequency.setValueAtTime(midiToHz(midi), when)
     if (preset.wave === 'pulse') osc.setPeriodicWave(getPulse(host, dutyOverride ?? preset.duty))
+    else if (preset.wave === 'wavetable') osc.setPeriodicWave(getTableWave(host, tableOverride ?? preset.table ?? GB_WAVES.round))
     else osc.type = 'triangle'
     osc.connect(gain)
     source = osc
@@ -179,9 +235,9 @@ export class ChippyAudio {
     this.input?.gain.setTargetAtTime(this.level, this.time, .015)
   }
 
-  noteOn(note: number, preset: Preset, duty?: number): StopVoice {
+  noteOn(note: number, preset: Preset, duty?: number, table?: number[]): StopVoice {
     if (!this.ctx || !this.input) return () => {}
-    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty)
+    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty, table)
     this.voices.add(voice)
     return () => {
       voice()
@@ -189,9 +245,9 @@ export class ChippyAudio {
     }
   }
 
-  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number): void {
+  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number, table?: number[]): void {
     if (!this.ctx || !this.input) return
-    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty)
+    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty, table)
     stop(start + duration)
   }
 
@@ -215,6 +271,7 @@ export async function exportLoop(
   preset: Preset,
   bpm: number,
   duty?: number,
+  table?: number[],
 ): Promise<Blob> {
   const stepTime = 60 / bpm / 4
   const sampleRate = 44100
@@ -230,7 +287,7 @@ export async function exportLoop(
   steps.forEach((note, i) => {
     if (note === null) return
     const at = .05 + stepTime * i
-    const stop = createVoice(offline, input, note, preset, at, .83, duty)
+    const stop = createVoice(offline, input, note, preset, at, .83, duty, table)
     stop(at + stepTime * .76)
   })
   const rendered = await offline.startRendering()
