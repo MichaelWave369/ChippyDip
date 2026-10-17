@@ -7,6 +7,7 @@ import { createFmVoice, FM_PRESETS } from './fm.js'
 import type { FmPatch } from './fm.js'
 import { createSampleVoice, SNES_PRESETS } from './snes.js'
 import type { SnesPatch, SampleData } from './snes.js'
+import type { SoundLayer } from './layers.js'
 export { SNES_PRESETS, SNES_SAMPLE_IDS, isValidSnesPatch, isValidSampleData, makeFactorySample, decodeSampleFile, cloneSnesPatch } from './snes.js'
 export type { SnesPatch, SampleData, SampleShape } from './snes.js'
 
@@ -222,6 +223,44 @@ export function createVoice(
   }
 }
 
+/**
+ * A single MIDI note fans out into four independently selected chip families.
+ * One gain node per layer keeps level control local and prevents the nested FM
+ * and sample effects from bypassing each lane's mix level.
+ */
+export function createLayerVoice(
+  host: AudioHost,
+  destination: AudioNode,
+  midi: number,
+  layers: readonly SoundLayer[],
+  when: number,
+  velocity = .85,
+  sampleData?: Readonly<Record<string, SampleData>>,
+): StopVoice {
+  const active = layers.filter(layer => layer.enabled && layer.gain > 0)
+  if (!active.length) return () => {}
+  const normalization = 1 / Math.sqrt(active.length)
+  const releases: StopVoice[] = []
+  for (const layer of active) {
+    const preset = PRESETS.find(p => p.id === layer.presetId && (p.chip ?? 'nes') === layer.chip)
+    if (!preset) continue
+    const lane = host.createGain()
+    lane.gain.value = layer.gain * normalization
+    lane.connect(destination)
+    const pitch = Math.max(0, Math.min(127, midi + layer.transpose))
+    releases.push(createVoice(
+      host, lane, pitch, preset, when, velocity, undefined,
+      layer.table, layer.fm, layer.sample, sampleData?.[layer.presetId],
+    ))
+  }
+  let stopped = false
+  return (requested?: number) => {
+    if (stopped) return
+    stopped = true
+    for (const stop of releases) stop(requested)
+  }
+}
+
 export class ChippyAudio {
   private ctx: AudioContext | null = null
   private input: GainNode | null = null
@@ -276,6 +315,27 @@ export class ChippyAudio {
     stop(start + duration)
   }
 
+  noteOnLayers(note: number, layers: readonly SoundLayer[], samples?: Readonly<Record<string, SampleData>>): StopVoice {
+    if (!this.ctx || !this.input) return () => {}
+    // Protect the browser from runaway stacked polyphony on stuck input.
+    if (this.voices.size >= 12) {
+      const oldest = this.voices.values().next().value
+      if (oldest) { oldest(); this.voices.delete(oldest) }
+    }
+    const voice = createLayerVoice(this.ctx, this.input, note, layers, this.time + .006, .95, samples)
+    this.voices.add(voice)
+    return () => {
+      voice()
+      this.voices.delete(voice)
+    }
+  }
+
+  triggerLayers(note: number, layers: readonly SoundLayer[], start: number, duration: number, samples?: Readonly<Record<string, SampleData>>): void {
+    if (!this.ctx || !this.input) return
+    const stop = createLayerVoice(this.ctx, this.input, note, layers, start, .82, samples)
+    stop(start + duration)
+  }
+
   stopAll(): void {
     for (const stop of this.voices) stop()
     this.voices.clear()
@@ -320,6 +380,34 @@ export async function exportLoop(
   })
   const rendered = await offline.startRendering()
   return encodeWav(rendered)
+}
+
+/** Same engine and layer normalization for offline pattern rendering. */
+export async function exportLayerLoop(
+  steps: (number | null)[],
+  layers: readonly SoundLayer[],
+  bpm: number,
+  samples?: Readonly<Record<string, SampleData>>,
+): Promise<Blob> {
+  const stepTime = 60 / bpm / 4
+  const sampleRate = 44100
+  // Leave room for sustained sample releases and echo tails.
+  const seconds = stepTime * steps.length + 3
+  const offline = new OfflineAudioContext(2, Math.ceil(seconds * sampleRate), sampleRate)
+  const input = offline.createGain()
+  input.gain.value = .68
+  const compressor = offline.createDynamicsCompressor()
+  compressor.threshold.value = -12
+  compressor.ratio.value = 8
+  input.connect(compressor)
+  compressor.connect(offline.destination)
+  steps.forEach((note, i) => {
+    if (note === null) return
+    const at = .05 + stepTime * i
+    const stop = createLayerVoice(offline, input, note, layers, at, .83, samples)
+    stop(at + stepTime * .76)
+  })
+  return encodeWav(await offline.startRendering())
 }
 
 function encodeWav(buffer: AudioBuffer): Blob {

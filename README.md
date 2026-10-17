@@ -4,7 +4,7 @@
 
 ChippyDip is an original, open-source retro-console-inspired instrument lab, building toward a **Windows standalone instrument + VST3 for FL Studio**. Its first real deliverable is a playable browser lab with four chip families: no account, ROM, emulator or copyrighted game sample required.
 
-> **Status: v0.4 Web Lab prototype.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. Standalone/VST3 builds remain planned.
+> **Status: v0.5 Web Lab prototype.** NES, Game Boy, Genesis and SNES-style sample sounds are **hardware-inspired**, not cycle-accurate hardware emulation. Standalone/VST3 builds remain planned.
 
 ## Try it
 
@@ -28,11 +28,11 @@ npm run preview
 
 ## What works now
 
-- **NES Classics:** the five *unchanged* v0.1 factory patches: Hero Pulse, Pixel Pluck, Duty Dream, Triangle Bass, Noise Machine.\n- **Pocket Wave Lab:** four original Game Boy-inspired 32-step/4-bit wavetable patches, and a click/tap editor for drawing new waves.\n- Waveform edits are kept separately per pocket preset, and can be stored in pattern JSON.\n- **SNES Sample Lab:** four independently generated PCM factory instruments (harp, bell, strings, choir) with pitch tracking, looping, ADSR, controllable echo, and session-local audio file import. Imported audio works in live playback and WAV rendering but is **not embedded in JSON patterns**.\n- **Genesis FM Lab:** four original four-operator FM factory patches, four graph algorithms, modulation-index slider, oscillator ratios/levels, and individual ADSR envelope editors. Audio-rate modulator connections drive oscillator frequency inputs.
+- **DOUBLE DIP:** new four-lane cross-console instrument rack. Enable/mute each chip, choose individual presets, adjust level and transpose, then play all active layers from one key or the 16-step sequencer. Normalized mix and shared compressor feed the output; WAV exports render all four layers.\n- **NES Classics:** the five *unchanged* v0.1 factory patches: Hero Pulse, Pixel Pluck, Duty Dream, Triangle Bass, Noise Machine.\n- **Pocket Wave Lab:** four original Game Boy-inspired 32-step/4-bit wavetable patches, and a click/tap editor for drawing new waves.\n- Waveform edits are kept separately per pocket preset, and can be stored in pattern JSON.\n- **SNES Sample Lab:** four independently generated PCM factory instruments (harp, bell, strings, choir) with pitch tracking, looping, ADSR, controllable echo, and session-local audio file import. Imported audio works in live playback and WAV rendering but is **not embedded in JSON patterns**.\n- **Genesis FM Lab:** four original four-operator FM factory patches, four graph algorithms, modulation-index slider, oscillator ratios/levels, and individual ADSR envelope editors. Audio-rate modulator connections drive oscillator frequency inputs.
 - 12.5%, 25%, 50% and 75% pulse duty controls.
 - A simple, polyphonic virtual keyboard (mouse, touch, computer A–K keys).
 - A 16-step pattern sequencer with pitch painting, BPM and transport.
-- Save and load patterns as validated ChippyDip JSON. The v0.4 exporter saves format version 4, including Game Boy waves, Genesis FM edits or SNES sample controls. Legacy v1, v2 and v3 files still load. Imported audio bytes are never embedded in these JSON files.
+- Save and load patterns as validated ChippyDip JSON. The v0.5 exporter saves format version 5, including single/double mode, all four layer settings, edited Game Boy waves, Genesis FM operators, or SNES sample controls. Legacy v1, v2, v3 and v4 files still load. Imported audio bytes are never embedded in these JSON files.
 - **Offline WAV export** of the one-bar pattern: PCM 16-bit stereo, 44.1 kHz.
 - Real-time waveform scope, master volume and compressor/limiter.
 - Responsive web UI, GitHub Pages deployment workflow.
@@ -51,7 +51,7 @@ Browsers suspend audio until a user gesture; press a note or Play to activate it
 | v0.2 | Game Boy-inspired 32-slot wavetable and instruments | Preset-preservation tests, editable waves and WAV export |
 | v0.3 | Genesis-inspired four-operator FM | Four routing graphs, editor, preset tests, JSON v3 compatibility |
 | v0.4 | SNES-inspired PCM sample lab | Original factory samples, audio import, playback, echo and tests; BRR decoder/encoder future |
-| v0.5 | Cross-chip layers | Mix, modulation and preset recall |
+| v0.5 | DOUBLE DIP cross-chip layers | Four independent lanes, levels, transpose, mute, presets, JSON v5 and WAV |
 | v0.6 | Native DSP core | Portable C++ DSP with regression tests |
 | v0.7 | Standalone + VST3 | Plugin loads in current FL Studio, MIDI and automation verified |
 | v1.0 | Full release | Reproducible installers, compatibility testing, documentation |
@@ -59,7 +59,7 @@ Browsers suspend audio until a user gesture; press a note or Play to activate it
 ## Architecture
 
 - `src/audio.ts` contains **independently written** Web Audio voice generation and offline WAV rendering.
-- `src/App.tsx` handles the interface, transport, input and pattern controls.
+- `src/layers.ts` holds the typed four-chip rack and import validation, and `src/LayerRack.tsx` presents the rack.\n- `src/App.tsx` handles the interface, transport, input and pattern controls.
 - `src/styles.css` contains ChippyDip's responsive, pixel-arcade visual system.
 - The future native core will use shared behavior specifications and test fixtures; **Web Audio code is not a drop-in native VST DSP implementation**.
 - `docs/NATIVE_PLAN.md` describes the standalone/plugin architecture and acceptance gates.
@@ -74,9 +74,9 @@ The NES, Game Boy, Genesis and SNES-style sounds are *musical interpretations*. 
 
 ## Patch preservation and import safety
 
-The first five NES-inspired v0.1 factory parameters stay untouched and are checked by a literal regression snapshot in `tests/audio.test.mjs`. The four Game Boy patches remain distinct, and the new Genesis FM patches have their own regression tests. Exported pattern files use JSON version 4; the importer accepts versions 1, 2, 3 and 4. The parser checks 16 sequencer steps, tempo, pulse duty, optional 32-step wave data, four-operator FM structures and sample settings before applying state. Original patches aren't mutated when editing custom variations. Audio files are generated locally; no user audio is uploaded.
+The first five NES-inspired v0.1 factory parameters stay untouched and are checked by a literal regression snapshot in `tests/audio.test.mjs`. The four Game Boy patches remain distinct, and the new Genesis FM patches have their own regression tests. Exported pattern files use JSON version 5; the importer accepts versions 1, 2, 3, 4 and 5. The parser checks 16 sequencer steps, tempo, pulse duty, optional 32-step wave data, four-operator FM structures and sample settings before applying state. Original patches aren't mutated when editing custom variations. Audio files are generated locally; no user audio is uploaded.
 
-See [SNES Sample Lab design and limits](docs/SNES_SAMPLE_LAB.md) and [FM architecture and limitations](docs/FM_ENGINE.md) for current synthesis behavior and verification gates.
+See [Double Dip layering architecture](docs/DOUBLE_DIP.md), [SNES Sample Lab design and limits](docs/SNES_SAMPLE_LAB.md) and [FM architecture and limitations](docs/FM_ENGINE.md) for current synthesis behavior and verification gates.
 
 ## Principles
 
