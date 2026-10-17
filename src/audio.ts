@@ -3,8 +3,14 @@
  * This is a musical interpretation of the APU, NOT cycle-accurate emulation.
  * No ROMs, proprietary samples, or borrowed emulation cores.
  */
-export type WaveKind = 'pulse' | 'triangle' | 'noise' | 'wavetable'
-export type ChipFamily = 'nes' | 'gameboy'
+import { createFmVoice, FM_PRESETS } from './fm.js'
+import type { FmPatch } from './fm.js'
+
+export { FM_PRESETS, FM_ALGORITHMS, isValidFmPatch, cloneFmPatch } from './fm.js'
+export type { FmPatch, FmOperator, FmAlgorithm } from './fm.js'
+
+export type WaveKind = 'pulse' | 'triangle' | 'noise' | 'wavetable' | 'fm'
+export type ChipFamily = 'nes' | 'gameboy' | 'genesis'
 
 export interface Preset {
   id: string
@@ -20,6 +26,7 @@ export interface Preset {
   accent: string
   chip?: ChipFamily
   table?: number[]
+  fm?: FmPatch
 }
 
 // The v0.1 factory patches and their sound settings are deliberately unchanged.
@@ -45,7 +52,7 @@ export const GAMEBOY_PRESETS: Preset[] = [
   { id: 'pocket-bell', name: 'POCKET BELL', caption: 'Shimmering wave tone', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.bell, duty: .5, attack: .007, decay: .32, sustain: .25, release: .35, level: .21, accent: '#96c1ff' },
   { id: 'pocket-tooth', name: 'POCKET TOOTH', caption: 'Crunchy rising edge', chip: 'gameboy', wave: 'wavetable', table: GB_WAVES.tooth, duty: .5, attack: .001, decay: .08, sustain: .8, release: .10, level: .18, accent: '#f2a3d5' },
 ]
-export const PRESETS: Preset[] = [...NES_PRESETS, ...GAMEBOY_PRESETS]
+export const PRESETS: Preset[] = [...NES_PRESETS, ...GAMEBOY_PRESETS, ...FM_PRESETS]
 
 export function isValidWaveTable(value: unknown): value is number[] {
   return Array.isArray(value) && value.length === 32 &&
@@ -151,7 +158,13 @@ export function createVoice(
   velocity = .85,
   dutyOverride?: number,
   tableOverride?: number[],
+  fmOverride?: FmPatch,
 ): StopVoice {
+  if (preset.wave === 'fm') {
+    const patch = fmOverride ?? preset.fm
+    if (!patch) throw new Error('FM preset missing operator patch')
+    return createFmVoice(host, destination, midi, patch, preset.level, when, velocity)
+  }
   const gain = host.createGain()
   const attackEnd = when + Math.max(.001, preset.attack)
   const decayEnd = attackEnd + Math.max(.002, preset.decay)
@@ -235,9 +248,9 @@ export class ChippyAudio {
     this.input?.gain.setTargetAtTime(this.level, this.time, .015)
   }
 
-  noteOn(note: number, preset: Preset, duty?: number, table?: number[]): StopVoice {
+  noteOn(note: number, preset: Preset, duty?: number, table?: number[], fm?: FmPatch): StopVoice {
     if (!this.ctx || !this.input) return () => {}
-    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty, table)
+    const voice = createVoice(this.ctx, this.input, note, preset, this.time + .006, .95, duty, table, fm)
     this.voices.add(voice)
     return () => {
       voice()
@@ -245,9 +258,9 @@ export class ChippyAudio {
     }
   }
 
-  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number, table?: number[]): void {
+  trigger(note: number, preset: Preset, start: number, duration: number, duty?: number, table?: number[], fm?: FmPatch): void {
     if (!this.ctx || !this.input) return
-    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty, table)
+    const stop = createVoice(this.ctx, this.input, note, preset, start, .82, duty, table, fm)
     stop(start + duration)
   }
 
@@ -272,6 +285,7 @@ export async function exportLoop(
   bpm: number,
   duty?: number,
   table?: number[],
+  fm?: FmPatch,
 ): Promise<Blob> {
   const stepTime = 60 / bpm / 4
   const sampleRate = 44100
@@ -287,7 +301,7 @@ export async function exportLoop(
   steps.forEach((note, i) => {
     if (note === null) return
     const at = .05 + stepTime * i
-    const stop = createVoice(offline, input, note, preset, at, .83, duty, table)
+    const stop = createVoice(offline, input, note, preset, at, .83, duty, table, fm)
     stop(at + stepTime * .76)
   })
   const rendered = await offline.startRendering()
