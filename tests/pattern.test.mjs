@@ -27,7 +27,7 @@ test('v0.3 FM patterns serialize and restore independent operator settings', () 
   patch.operators[0].ratio = 6
   const file = serializePattern({ preset: FM_PRESETS[0], duty: .5, bpm: 90, steps, fm: patch })
   const decoded = parsePattern(JSON.parse(JSON.stringify(file)))
-  assert.equal(file.version, 4)
+  assert.equal(file.version, 5)
   assert.equal(file.fm.index, 8.4)
   assert.equal(decoded.fm.operators[0].ratio, 6)
   assert.notEqual(decoded.fm, patch)
@@ -72,7 +72,7 @@ test('v0.4 SNES sample settings roundtrip without embedding PCM audio', () => {
   edited.echoMix = .49
   edited.loop = false
   const stored = serializePattern({ preset: snes, bpm: 104, duty: .5, steps, sample: edited })
-  assert.equal(stored.version, 4)
+  assert.equal(stored.version, 5)
   assert.equal(stored.sample.echoMix, .49)
   assert.equal(JSON.stringify(stored).includes('pcm'), false)
   const parsed = parsePattern(stored)
@@ -88,6 +88,44 @@ test('v0.4 rejects invalid sample parameter data and future unsupported files', 
     { ...good, sample: { ...good.sample, shape: 'not-a-factory-id' } },
     { ...good, sample: { ...good.sample, release: -1 } },
     { ...good, sample: 'binary-rom' },
-    { ...good, version: 5 },
+    { ...good, version: 6 },
   ]) assert.throws(() => parsePattern(malformed))
+})
+
+test('v0.4 sampled patterns remain readable as legacy single-chip mode', () => {
+  const older = { ...base(4, SNES_PRESETS[1].id), sample: cloneSnesPatch(SNES_PRESETS[1].sample) }
+  const parsed = parsePattern(older)
+  assert.equal(parsed.mode, 'single')
+  assert.equal(parsed.preset.id, 'snes-bell')
+  assert.equal(parsed.layers.length, 4)
+})
+
+test('v0.5 Double Dip patches store four independent layers and survive roundtrip', async () => {
+  const { DEFAULT_LAYERS, cloneLayers } = await import('../.testdist/layers.js')
+  const layers = cloneLayers(DEFAULT_LAYERS)
+  layers[0].gain = .32
+  layers[1].table = [...GB_WAVES.bell]
+  layers[2].fm = cloneFmPatch(FM_PRESETS[0].fm)
+  layers[3].sample = cloneSnesPatch(SNES_PRESETS[0].sample)
+  layers[2].transpose = -12
+  const file = serializePattern({ preset: NES_PRESETS[0], bpm: 105, duty: .5, steps, mode: 'double', layers })
+  assert.equal(file.version, 5)
+  assert.equal(file.mode, 'double')
+  assert.equal(JSON.stringify(file).includes('pcm'), false)
+  const loaded = parsePattern(JSON.parse(JSON.stringify(file)))
+  assert.equal(loaded.mode, 'double')
+  assert.deepEqual(loaded.layers, layers)
+  assert.notEqual(loaded.layers[1].table, layers[1].table)
+})
+
+test('v0.5 rejects invalid rack topology and reserved future versions', async () => {
+  const { DEFAULT_LAYERS } = await import('../.testdist/layers.js')
+  const good = { ...base(5, NES_PRESETS[0].id), mode: 'double', layers: DEFAULT_LAYERS }
+  for (const bad of [
+    { ...good, mode: 'triple' },
+    { ...good, layers: [] },
+    { ...good, layers: good.layers.map((l, i) => i === 0 ? { ...l, presetId: 'snes-harp' } : l) },
+    { ...good, layers: good.layers.map((l, i) => i === 3 ? { ...l, pcm: 'base64 copyrighted sample' } : l) },
+    { ...good, version: 6 },
+  ]) assert.throws(() => parsePattern(bad))
 })

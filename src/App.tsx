@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, FM_PRESETS, SNES_PRESETS, FM_ALGORITHMS, GB_WAVES, cloneFmPatch, cloneSnesPatch, decodeSampleFile, exportLoop, noteLabel } from './audio'
+import { ChippyAudio, DEFAULT_STEPS, PRESETS, NES_PRESETS, GAMEBOY_PRESETS, FM_PRESETS, SNES_PRESETS, FM_ALGORITHMS, GB_WAVES, cloneFmPatch, cloneSnesPatch, decodeSampleFile, exportLoop, exportLayerLoop, noteLabel } from './audio'
 import type { ChipFamily, FmPatch, FmOperator, SnesPatch, SampleData } from './audio'
 import { parsePattern, serializePattern } from './pattern'
+import { DEFAULT_LAYERS, activeLayers, cloneLayers } from './layers'
+import type { SoundLayer, PlayMode } from './layers'
+import LayerRack from './LayerRack'
 
 const KEYS = [
   { offset: 0, key: 'A' }, { offset: 1, key: 'W' }, { offset: 2, key: 'S' },
@@ -76,6 +79,8 @@ export default function App() {
   const heldRef = useRef(new Set<string>())
   const releasesRef = useRef(new Map<string, () => void>())
   const [chip, setChip] = useState<ChipFamily>('nes')
+  const [mode, setMode] = useState<PlayMode>('single')
+  const [layers, setLayers] = useState<SoundLayer[]>(() => cloneLayers(DEFAULT_LAYERS))
   const [presetId, setPresetId] = useState('hero')
   const [customWaveTables, setCustomWaveTables] = useState<Record<string, number[]>>({})
   const [customFmPatches, setCustomFmPatches] = useState<Record<string, FmPatch>>({})
@@ -98,8 +103,14 @@ export default function App() {
   const activeFm = customFmPatches[preset.id] ?? preset.fm
   const activeSample = customSamplePatches[preset.id] ?? preset.sample
   const activeSampleData = importedSamples[preset.id]
-  const latestRef = useRef({ steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData })
-  latestRef.current = { steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData }
+  const effectiveLayers: SoundLayer[] = layers.map(layer => ({
+    ...layer,
+    ...(customWaveTables[layer.presetId] ? { table: customWaveTables[layer.presetId] } : {}),
+    ...(customFmPatches[layer.presetId] ? { fm: customFmPatches[layer.presetId] } : {}),
+    ...(customSamplePatches[layer.presetId] ? { sample: customSamplePatches[layer.presetId] } : {}),
+  }))
+  const latestRef = useRef({ steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData, mode, effectiveLayers, importedSamples })
+  latestRef.current = { steps, preset, duty, activeWave, activeFm, activeSample, activeSampleData, mode, effectiveLayers, importedSamples }
 
   const selectChip = (selected: ChipFamily) => {
     setChip(selected)
@@ -168,10 +179,12 @@ export default function App() {
     setSelectedNote(note)
     void wake().then(ready => {
       if (!ready || !heldRef.current.has(id)) return
-      const stop = audio.noteOn(note, preset, duty, activeWave, activeFm, activeSample, activeSampleData)
+      const stop = mode === 'double'
+        ? audio.noteOnLayers(note, effectiveLayers, importedSamples)
+        : audio.noteOn(note, preset, duty, activeWave, activeFm, activeSample, activeSampleData)
       releasesRef.current.set(id, stop)
     })
-  }, [wake, audio, preset, duty, activeWave, activeFm, activeSample, activeSampleData])
+  }, [wake, audio, preset, duty, activeWave, activeFm, activeSample, activeSampleData, mode, effectiveLayers, importedSamples])
 
   const release = useCallback((id: string) => {
     heldRef.current.delete(id)
@@ -214,9 +227,12 @@ export default function App() {
     const tick = () => {
       const horizon = audio.time + .11
       while (nextAt < horizon) {
-        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table, activeFm: fm, activeSample: samplePatch, activeSampleData: pcm } = latestRef.current
+        const { steps: notes, preset: patch, duty: pulseDuty, activeWave: table, activeFm: fm, activeSample: samplePatch, activeSampleData: pcm, mode: playMode, effectiveLayers: rack, importedSamples: userSamples } = latestRef.current
         const note = notes[index]
-        if (note !== null) audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table, fm, samplePatch, pcm)
+        if (note !== null) {
+          if (playMode === 'double') audio.triggerLayers(note, rack, nextAt, stepTime * .74, userSamples)
+          else audio.trigger(note, patch, nextAt, stepTime * .74, pulseDuty, table, fm, samplePatch, pcm)
+        }
         const highlight = index
         window.setTimeout(() => setPlayhead(highlight), Math.max(0, (nextAt - audio.time) * 1000))
         nextAt += stepTime
@@ -250,6 +266,8 @@ export default function App() {
       ...(preset.wave === 'wavetable' ? { table: activeWave } : {}),
       ...(preset.wave === 'fm' && activeFm ? { fm: activeFm } : {}),
       ...(preset.wave === 'sample' && activeSample ? { sample: activeSample } : {}),
+      mode,
+      layers: effectiveLayers,
     })
     download(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'chippydip-pattern.json')
   }
@@ -262,23 +280,26 @@ export default function App() {
       setSteps(result.steps)
       setPresetId(result.preset.id)
       setChip(result.preset.chip ?? 'nes')
-      if (result.table) {
-        setCustomWaveTables(previous => ({ ...previous, [result.preset.id]: result.table! }))
+      setMode(result.mode ?? 'single')
+      setLayers(cloneLayers(result.layers ?? DEFAULT_LAYERS))
+      const tables: Record<string, number[]> = {}
+      const fms: Record<string, FmPatch> = {}
+      const samples: Record<string, SnesPatch> = {}
+      if (result.table) tables[result.preset.id] = result.table
+      if (result.fm) fms[result.preset.id] = result.fm
+      if (result.sample) samples[result.preset.id] = result.sample
+      for (const layer of result.layers ?? []) {
+        if (layer.table) tables[layer.presetId] = layer.table
+        if (layer.fm) fms[layer.presetId] = layer.fm
+        if (layer.sample) samples[layer.presetId] = layer.sample
       }
-      if (result.fm) {
-        setCustomFmPatches(previous => ({ ...previous, [result.preset.id]: result.fm! }))
-      }
-      if (result.sample) {
-        setCustomSamplePatches(previous => ({ ...previous, [result.preset.id]: result.sample! }))
-        // A JSON pattern contains settings only, never embedded or linked
-        // audio. Prevent old session PCM from silently affecting a new load.
-        setImportedSamples(previous => {
-          const next = { ...previous }
-          delete next[result.preset.id]
-          return next
-        })
-        setSampleMessage('LOADED PATCH SETTINGS · IMPORT AUDIO AGAIN IF NEEDED')
-      }
+      setCustomWaveTables(tables)
+      setCustomFmPatches(fms)
+      setCustomSamplePatches(samples)
+      // No user audio file is stored in the pattern. Clear any old imported
+      // PCM so a loaded session cannot accidentally borrow the wrong sample.
+      setImportedSamples({})
+      setSampleMessage('PATTERN LOADED · RE-IMPORT ANY CUSTOM AUDIO')
       setDuty(result.duty)
       setBpm(result.bpm)
     } catch {
@@ -289,8 +310,10 @@ export default function App() {
   const renderWav = async () => {
     setExporting(true)
     try {
-      const wav = await exportLoop(steps, preset, bpm, duty, activeWave, activeFm, activeSample, activeSampleData)
-      download(wav, 'chippydip-' + preset.id + '-' + bpm + 'bpm.wav')
+      const wav = mode === 'double'
+        ? await exportLayerLoop(steps, effectiveLayers, bpm, importedSamples)
+        : await exportLoop(steps, preset, bpm, duty, activeWave, activeFm, activeSample, activeSampleData)
+      download(wav, 'chippydip-' + (mode === 'double' ? 'double-dip' : preset.id) + '-' + bpm + 'bpm.wav')
     } catch (error) {
       console.error('WAV rendering failed', error)
       window.alert('WAV export failed. Your browser may not support offline audio rendering.')
@@ -307,7 +330,7 @@ export default function App() {
         <div className="brandmark" aria-hidden="true"><span>✳</span></div>
         <div className="top-brand">CHIPPY<span>DIP</span><sup>®*</sup></div>
         <div className="top-spacer" />
-        <span className="top-build">WEB LAB <b>v0.4</b></span>
+        <span className="top-build">WEB LAB <b>v0.5</b></span>
         <a className="top-link" href={repoUrl} target="_blank" rel="noreferrer">GITHUB ↗</a>
       </header>
 
@@ -334,6 +357,11 @@ export default function App() {
         </section>
 
         <div className="section-heading"><span>01 / SOUND LAB</span><span className="status"><i className={status === 'ready' ? 'on' : ''} /> {status === 'idle' ? 'CLICK A KEY TO START AUDIO' : status === 'ready' ? 'AUDIO ENGINE ONLINE' : 'AUDIO BLOCKED'}</span></div>
+        <div className="play-mode" role="group" aria-label="Select sound mode">
+          <button type="button" className={mode === 'single' ? 'active' : ''} aria-pressed={mode === 'single'} onClick={() => setMode('single')}>♫ SINGLE CHIP</button>
+          <button type="button" className={mode === 'double' ? 'active' : ''} aria-pressed={mode === 'double'} onClick={() => setMode('double')}>✦ DOUBLE DIP · FOUR CHIPS</button>
+          <span>{mode === 'double' ? activeLayers(layers).length + ' CHIP LANES LIVE · ONE MIDI NOTE' : 'ORIGINAL SINGLE-INSTRUMENT WORKFLOW'}</span>
+        </div>
         <section className="workbench">
           <aside className="preset-panel panel">
             <div className="panel-heading"><span>PATCH BAY</span><span>{chip === 'nes' ? 'NES CLASSICS' : chip === 'gameboy' ? 'POCKET WAVE LAB' : chip === 'genesis' ? 'GENESIS FM LAB' : 'SNES SAMPLE LAB'}</span></div>
@@ -505,6 +533,10 @@ export default function App() {
           </div>
         </section>
 
+        {mode === 'double' && (
+          <LayerRack layers={layers} onChange={setLayers}
+            onEdit={(nextChip, nextPresetId) => { setChip(nextChip); setPresetId(nextPresetId) }} />
+        )}
         <div className="section-heading"><span>02 / PIXEL SEQUENCER</span><span>16 STEPS · ONE BAR · YOUR RULES</span></div>
         <section className="sequencer panel">
           <div className="sequencer-toolbar">
@@ -544,7 +576,7 @@ export default function App() {
         </section>
 
         <section className="future-section">
-          <div><span className="eyebrow">FOUR SOUND FAMILIES · AND COUNTING</span><h2>THE DIP KEEPS GETTING DEEPER.</h2><p>NES pulses, Game Boy wavetables, Genesis-style FM and SNES-inspired sampled instruments now share one sound lab. Next: Double Dip cross-chip layering, followed by native standalone and VST3 builds.</p></div>
+          <div><span className="eyebrow">FOUR CHIPS · ONE INSTRUMENT</span><h2>THE DOUBLE DIP IS HERE.</h2><p>Stack NES pulses, Game Boy waves, Genesis FM and SNES-style PCM samples in one note, one sequencer and one WAV export. Up next: expanded sequencing, native standalone and VST3 builds.</p></div>
           <div className="future-chips"><span>GAME BOY <small>NOW PLAYABLE</small></span><span>GENESIS <small>NOW PLAYABLE</small></span><span>SNES <small>NOW PLAYABLE</small></span><span>VST3 <small>PLANNED</small></span></div>
         </section>
       </main>
